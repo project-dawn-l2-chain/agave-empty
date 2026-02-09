@@ -1,118 +1,122 @@
-<p align="center">
-  <a href="https://solana.com">
-    <img alt="Solana" src="https://i.imgur.com/0vfIMHo.png" width="250" />
-  </a>
-</p>
+# ProjectDawn Eclipse L2
 
-[![Solana crate](https://img.shields.io/crates/v/solana-core.svg)](https://crates.io/crates/solana-core)
-[![Solana documentation](https://docs.rs/solana-core/badge.svg)](https://docs.rs/solana-core)
-[![Build status](https://badge.buildkite.com/8cc350de251d61483db98bdfc895b9ea0ac8ffa4a32ee850ed.svg?branch=master)](https://buildkite.com/solana-labs/solana/builds?branch=master)
-[![codecov](https://codecov.io/gh/solana-labs/solana/branch/master/graph/badge.svg)](https://codecov.io/gh/solana-labs/solana)
+Eclipse-based SVM L2 chain with custom DAWN tokenomics.
 
-# Building
+## Overview
 
-## **1. Install rustc, cargo and rustfmt.**
+ProjectDawn is an L2 blockchain built on [Eclipse's Agave fork](https://github.com/Eclipse-Laboratories-Inc/agave) (3341 commits ahead of upstream [anza-xyz/agave](https://github.com/anza-xyz/agave)). It operates as a single-sequencer L2 using Solana's validator terminology for compatibility, replacing SOL with a custom **DAWN** token (symbol: ☀).
 
+All ProjectDawn tokenomics are **feature-gated** -- disabled by default and activated on-chain via a deterministic feature pubkey.
+
+## Key Features
+
+- **Permanent Stake Locking** -- Lock stakes permanently in exchange for a 120% reward bonus (20% extra on top of base rewards).
+- **Passive Staking** -- 5-tier lockup system (30/90/180/365/730 days) with proportional reward multipliers.
+- **4-Way Fee Split** -- EIP-1559-style fee distribution between burn, validator, treasury, and developer accounts.
+- **Flat 5% APY** -- Replaces Solana's declining inflation curve with a fixed annual staking yield.
+- **Developer Fee Attribution** -- Programs earn a share of transaction fees proportional to their usage.
+- **On-Chain Treasury** -- Seeded at genesis, receives its share of every fee split.
+- **Feature Gate** -- All ProjectDawn economics are gated behind on-chain feature activation, allowing the chain to launch with stock Solana economics and transition when ready.
+
+## Pre-built Binaries
+
+Pre-built binaries for **Linux x86-64** are available on the [Releases](../../releases) page. All other platforms must build from source (see below).
+
+## Building from Source
+
+### Prerequisites
+
+- Rust 1.84.1 or later
+- Standard Solana/Agave build dependencies (OpenSSL, pkg-config, protobuf, clang, etc.)
+
+On Ubuntu/Debian:
 ```bash
-$ curl https://sh.rustup.rs -sSf | sh
-$ source $HOME/.cargo/env
-$ rustup component add rustfmt
+sudo apt-get update
+sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang cmake make libprotobuf-dev protobuf-compiler libclang-dev
 ```
 
-When building the master branch, please make sure you are using the latest stable rust version by running:
+### Build
 
 ```bash
-$ rustup update
+# May be needed on some Linux systems:
+export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
+
+cargo build --release --bin agave-validator
+cargo build --release --bin solana
+cargo build --release --bin solana-genesis
+cargo build --release --bin solana-keygen
 ```
 
-When building a specific release branch, you should check the rust version in `ci/rust-version.sh` and if necessary, install that version by running:
-```bash
-$ rustup install VERSION
-```
-Note that if this is not the latest rust version on your machine, cargo commands may require an [override](https://rust-lang.github.io/rustup/overrides.html) in order to use the correct version.
-
-On Linux systems you may need to install libssl-dev, pkg-config, zlib1g-dev, protobuf etc.
-
-On Ubuntu:
-```bash
-$ sudo apt-get update
-$ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang cmake make libprotobuf-dev protobuf-compiler libclang-dev
-```
-
-On Fedora:
-```bash
-$ sudo dnf install openssl-devel systemd-devel pkg-config zlib-devel llvm clang cmake make protobuf-devel protobuf-compiler perl-core libclang-dev
-```
-
-## **2. Download the source code.**
+## Launching a Testnet
 
 ```bash
-$ git clone https://github.com/anza-xyz/agave.git
-$ cd agave
+# 1. Create genesis with ProjectDawn treasury
+./scripts/projectdawn-testnet.sh setup
+
+# 2. Start bootstrap validator (acts as sequencer in L2 mode)
+multinode-demo/bootstrap-validator.sh
+
+# 3. (Optional) Start additional validators
+multinode-demo/validator.sh
+
+# 4. Activate ProjectDawn feature
+./scripts/projectdawn-testnet.sh activate
+
+# 5. Check status
+./scripts/projectdawn-testnet.sh status
 ```
 
-## **3. Build.**
+> **Note:** Feature activation requires a keypair matching pubkey `FfysvyBPqGve3oDPu14LB1UqR8B2v7CeJ6EajWdx8P8D` placed at `config/projectdawn-feature.json`.
+
+## Running Tests
 
 ```bash
-$ ./cargo build
+# Core test suites (~723 passing)
+cargo test -p solana-runtime
+cargo test -p solana-stake-program
+cargo test -p solana-stake-interface
+
+# ProjectDawn integration tests
+cargo test -p solana-runtime --test projectdawn_permanent
+cargo test -p solana-runtime --test projectdawn_passive
+cargo test -p solana-runtime --test projectdawn_fees
 ```
 
-> [!NOTE]
-> Note that this builds a debug version that is **not suitable for running a testnet or mainnet validator**. Please read [`docs/src/cli/install.md`](docs/src/cli/install.md#build-from-source) for instructions to build a release version for test and production uses.
+## Project Structure
 
-# Testing
+ProjectDawn-specific files and directories:
 
-**Run the test suite:**
-
-```bash
-$ ./cargo test
+```
+solana-stake-interface/                        # Custom stake instructions (PermanentLock, PassiveLock, EarlyUnlock)
+solana-native-token/                           # DAWN token branding (☀ symbol)
+runtime/src/projectdawn_config.rs              # Configuration (APY, fee splits, transition)
+runtime/tests/projectdawn_permanent.rs         # Permanent lock integration tests (11 tests)
+runtime/tests/projectdawn_passive.rs           # Passive staking integration tests (4 tests)
+runtime/tests/projectdawn_fees.rs              # Fee split integration tests (5 tests)
+scripts/projectdawn-testnet.sh                 # Testnet launch script
+programs/stake/src/stake_state.rs              # Modified stake program with permanent lock guards
+genesis/src/main.rs                            # Treasury seeding at genesis
 ```
 
-### Starting a local testnet
+## Configuration
 
-Start your own testnet locally, instructions are in the [online docs](https://docs.solanalabs.com/clusters/benchmark).
+Default ProjectDawn configuration (defined in `projectdawn_config.rs`):
 
-### Accessing the remote development cluster
+| Parameter | Value |
+|-----------|-------|
+| Annual staking APY | 5% |
+| Fee transition period | 10 years (1460 epochs) |
+| Launch fee split | 10% burn / 0% validator / 45% treasury / 45% developer |
+| Maturity fee split | 25% burn / 25% validator / 25% treasury / 25% developer |
+| Feature gate pubkey | `FfysvyBPqGve3oDPu14LB1UqR8B2v7CeJ6EajWdx8P8D` |
 
-* `devnet` - stable public cluster for development accessible via
-devnet.solana.com. Runs 24/7. Learn more about the [public clusters](https://docs.solanalabs.com/clusters)
+## Known Limitations
 
-# Benchmarking
+- **GovernanceUnlock** is a stub (returns error) -- governance-based unlocking is not yet implemented.
+- **No multi-validator consensus testing** -- the L2 operates as a single-sequencer; multi-validator topologies are untested.
+- **No fuzz testing** -- property-based and fuzz testing has not been performed.
+- **Feature keypair** -- The private key for the deterministic feature gate pubkey must be provided externally.
 
-First, install the nightly build of rustc. `cargo bench` requires the use of the
-unstable features only available in the nightly build.
+## License
 
-```bash
-$ rustup install nightly
-```
-
-Run the benchmarks:
-
-```bash
-$ cargo +nightly bench
-```
-
-# Release Process
-
-The release process for this project is described [here](RELEASE.md).
-
-# Code coverage
-
-To generate code coverage statistics:
-
-```bash
-$ scripts/coverage.sh
-$ open target/cov/lcov-local/index.html
-```
-
-Why coverage? While most see coverage as a code quality metric, we see it primarily as a developer
-productivity metric. When a developer makes a change to the codebase, presumably it's a *solution* to
-some problem.  Our unit-test suite is how we encode the set of *problems* the codebase solves. Running
-the test suite should indicate that your change didn't *infringe* on anyone else's solutions. Adding a
-test *protects* your solution from future changes. Say you don't understand why a line of code exists,
-try deleting it and running the unit-tests. The nearest test failure should tell you what problem
-was solved by that code. If no test fails, go ahead and submit a Pull Request that asks, "what
-problem is solved by this code?" On the other hand, if a test does fail and you can think of a
-better way to solve the same problem, a Pull Request with your solution would most certainly be
-welcome! Likewise, if rewriting a test can better communicate what code it's protecting, please
-send us that patch!
+Same as upstream Agave -- [Apache 2.0](LICENSE).
