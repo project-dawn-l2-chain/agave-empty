@@ -1,0 +1,9 @@
+[package]
+name = "solana-native-token"
+description = "Definitions for the native DAWN token and its fractional lamports."
+version = "2.2.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]

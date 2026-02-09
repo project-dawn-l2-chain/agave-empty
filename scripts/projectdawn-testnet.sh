@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# ProjectDawn Testnet Setup Script
+#
+# This script extends the standard Solana multinode-demo setup with
+# ProjectDawn-specific configuration:
+# - Treasury account seeded at genesis with a real keypair
+# - ProjectDawn feature activation instructions (post-genesis, Approach B)
+#
+# Usage:
+#   ./scripts/projectdawn-testnet.sh [setup|activate|status]
+#
+# Commands:
+#   setup    - Generate keypairs and create genesis ledger
+#   activate - Activate ProjectDawn feature (after validators are running)
+#   status   - Check ProjectDawn feature and treasury status
+#
+# Prerequisites:
+#   - Solana CLI tools built and available (cargo build or USE_INSTALL=1)
+#   - For 'activate': a running validator cluster (use multinode-demo scripts)
+#   - For 'activate': a keypair file whose pubkey matches PROJECTDAWN_FEATURE_ID
+#     Place it at: config/projectdawn-feature.json
+
+set -euo pipefail
+
+# --- Constants ----------------------------------------------------------------
+# In ProjectDawn L2 mode, the bootstrap validator acts as the sequencer.
+# Users delegate DAWN to the sequencer's vote account to earn staking rewards.
+
+# ProjectDawn feature gate pubkey (base58 of 0xDA00...0002).
+# When a Feature account with this pubkey exists on-chain, the runtime enables
+# ProjectDawn tokenomics (custom fee split, flat 5% staking APY, passive
+# staking, permanent locks). Without it, vanilla Solana economics apply.
+PROJECTDAWN_FEATURE_PUBKEY="FfysvyBPqGve3oDPu14LB1UqR8B2v7CeJ6EajWdx8P8D"
+
+# Default treasury pubkey placeholder (base58 of 0xDA00...0001).
+# Overridden at genesis when a real treasury keypair is generated.
+DEFAULT_TREASURY_PUBKEY="FfysvyBPqGve3oDPu14LB1UqR8B2v7CeJ6EajWdx8P8C"
+
+# --- Resolve paths ------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOLANA_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_DIR="$SOLANA_ROOT/config"
+TREASURY_KEYPAIR="$CONFIG_DIR/treasury.json"
+FEATURE_KEYPAIR="$CONFIG_DIR/projectdawn-feature.json"
+
+# Source common.sh to get solana_keygen, solana_cli, etc.
+# shellcheck source=multinode-demo/common.sh
+source "$SOLANA_ROOT/multinode-demo/common.sh"
+
+# --- Helper functions ---------------------------------------------------------
+
+log() {
+  echo "[ProjectDawn] $*"
+}
+
+err() {
+  echo "[ProjectDawn] ERROR: $*" >&2
+  exit 1
+}
+
+ensure_config_dir() {
+  mkdir -p "$CONFIG_DIR"
+}
+
+get_treasury_pubkey() {
+  if [[ -f "$TREASURY_KEYPAIR" ]]; then
+    $solana_keygen pubkey "$TREASURY_KEYPAIR"
+  else
+    echo "$DEFAULT_TREASURY_PUBKEY"
+  fi
+}
+
+# --- Commands -----------------------------------------------------------------
+
+cmd_setup() {
+  log "Setting up ProjectDawn testnet genesis..."
+  ensure_config_dir
+
+  # 1. Generate treasury keypair if it does not exist
+  if [[ -f "$TREASURY_KEYPAIR" ]]; then
+    log "Treasury keypair already exists: $TREASURY_KEYPAIR"
+  else
+    log "Generating treasury keypair..."
+    $solana_keygen new --no-passphrase -so "$TREASURY_KEYPAIR"
+  fi
+
+  local treasury_pubkey
+  treasury_pubkey=$($solana_keygen pubkey "$TREASURY_KEYPAIR")
+  log "Treasury pubkey: $treasury_pubkey"
+
+  # 2. Run the standard multinode-demo/setup.sh with --treasury-pubkey injected
+  log "Running standard genesis setup with ProjectDawn treasury..."
+  "$SOLANA_ROOT/multinode-demo/setup.sh" --treasury-pubkey "$treasury_pubkey" "$@"
+
+  log ""
+  log "=== Genesis created successfully ==="
+  log ""
+  log "Treasury pubkey:  $treasury_pubkey"
+  log "Treasury keypair: $TREASURY_KEYPAIR"
+  log ""
+  log "Next steps:"
+  log "  1. Start the bootstrap validator:"
+  log "       multinode-demo/bootstrap-validator.sh"
+  log "  2. (Optional) Start additional validators:"
+  log "       multinode-demo/validator.sh"
+  log "  3. Activate the ProjectDawn feature:"
+  log "       ./scripts/projectdawn-testnet.sh activate"
+  log "  4. Check status:"
+  log "       ./scripts/projectdawn-testnet.sh status"
+}
+
+cmd_activate() {
+  log "Activating ProjectDawn feature..."
+
+  # 1. Check that validators are running
+  if ! $solana_cli cluster-version > /dev/null 2>&1; then
+    err "Cannot reach cluster. Ensure validators are running and 'solana cluster-version' works."
+  fi
+  log "Cluster is reachable (version: $($solana_cli cluster-version))"
+
+  # 2. Check for feature keypair
+  if [[ ! -f "$FEATURE_KEYPAIR" ]]; then
+    log ""
+    log "Feature keypair not found at: $FEATURE_KEYPAIR"
+    log ""
+    log "To activate ProjectDawn, you need a keypair whose pubkey matches:"
+    log "  $PROJECTDAWN_FEATURE_PUBKEY"
+    log ""
+    log "This is the PROJECTDAWN_FEATURE_ID defined in:"
+    log "  runtime/src/projectdawn_config.rs"
+    log ""
+    log "The pubkey is derived from the fixed byte array:"
+    log "  [0xDA, 0x00, ..., 0x00, 0x02]"
+    log ""
+    log "Since this is a deterministic pubkey, the corresponding secret key"
+    log "must be pre-generated by the ProjectDawn team. Place it at:"
+    log "  $FEATURE_KEYPAIR"
+    log ""
+    log "Then re-run: ./scripts/projectdawn-testnet.sh activate"
+    err "Missing feature keypair."
+  fi
+
+  # Verify the keypair matches the expected pubkey
+  local actual_pubkey
+  actual_pubkey=$($solana_keygen pubkey "$FEATURE_KEYPAIR")
+  if [[ "$actual_pubkey" != "$PROJECTDAWN_FEATURE_PUBKEY" ]]; then
+    err "Feature keypair pubkey mismatch!
+  Expected: $PROJECTDAWN_FEATURE_PUBKEY
+  Got:      $actual_pubkey
+  The keypair at $FEATURE_KEYPAIR does not match PROJECTDAWN_FEATURE_ID."
+  fi
+  log "Feature keypair verified: $actual_pubkey"
+
+  # 3. Activate the feature
+  log "Submitting feature activation transaction..."
+  $solana_cli feature activate "$FEATURE_KEYPAIR" --fee-payer "$CONFIG_DIR/faucet.json"
+
+  log ""
+  log "=== Feature activation submitted ==="
+  log ""
+  log "The feature will become active at the start of the next epoch."
+  log "Use './scripts/projectdawn-testnet.sh status' to monitor activation."
+}
+
+cmd_status() {
+  log "Checking ProjectDawn testnet status..."
+  log ""
+
+  # 1. Feature status
+  log "--- Feature Gate ---"
+  if $solana_cli feature status "$PROJECTDAWN_FEATURE_PUBKEY" 2>/dev/null; then
+    : # solana feature status prints its own output
+  else
+    log "Feature $PROJECTDAWN_FEATURE_PUBKEY: not found / not activated"
+    log "(ProjectDawn tokenomics are DISABLED -- vanilla Solana economics apply)"
+  fi
+  log ""
+
+  # 2. Treasury balance
+  local treasury_pubkey
+  treasury_pubkey=$(get_treasury_pubkey)
+  log "--- Treasury ---"
+  log "Pubkey: $treasury_pubkey"
+  if $solana_cli balance "$treasury_pubkey" 2>/dev/null; then
+    : # solana balance prints its own output
+  else
+    log "Could not query treasury balance (cluster may not be running)"
+  fi
+  log ""
+
+  # 3. Cluster info (if available)
+  log "--- Cluster ---"
+  if $solana_cli cluster-version 2>/dev/null; then
+    : # prints version
+  else
+    log "Cluster not reachable"
+  fi
+}
+
+# --- Main dispatch ------------------------------------------------------------
+
+usage() {
+  echo "Usage: $0 [setup|activate|status]"
+  echo ""
+  echo "Commands:"
+  echo "  setup    - Generate keypairs and create genesis ledger"
+  echo "  activate - Activate ProjectDawn feature (requires running cluster)"
+  echo "  status   - Check ProjectDawn feature and treasury status"
+  echo ""
+  echo "Examples:"
+  echo "  $0 setup                           # Create genesis with treasury"
+  echo "  $0 setup --cluster-type development # Pass extra args to setup.sh"
+  echo "  $0 activate                        # Activate feature post-genesis"
+  echo "  $0 status                          # Check feature & treasury"
+}
+
+case "${1:-}" in
+  setup)
+    shift
+    cmd_setup "$@"
+    ;;
+  activate)
+    cmd_activate
+    ;;
+  status)
+    cmd_status
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  "")
+    usage
+    exit 1
+    ;;
+  *)
+    err "Unknown command: $1 (use setup, activate, or status)"
+    ;;
+esac
